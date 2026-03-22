@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyListener: HotkeyListener?
     private var spaceBridge: SpaceBridge?
     private var pagerController: PagerOverlayController?
+    private var onboardingWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -25,8 +26,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotkeyListener()
         setupPagerController()
 
-        // Hide dock icon — menu bar app only
-        NSApp.setActivationPolicy(.accessory)
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "nirvana.onboardingCompleted")
+        if !hasCompletedOnboarding {
+            showOnboarding()
+        } else {
+            // Hide dock icon — menu bar app only (keep dock icon during onboarding)
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    private func showOnboarding() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let onboardingView = OnboardingView(gridModel: gridModel) { [weak self] in
+            self?.onboardingWindow?.close()
+            self?.onboardingWindow = nil
+            NSApp.setActivationPolicy(.accessory)
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = NSColor(red: 0.1, green: 0.1, blue: 0.18, alpha: 1)
+        window.contentView = NSHostingView(rootView: onboardingView)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.isReleasedWhenClosed = false
+        onboardingWindow = window
     }
 
     private func setupMenuBar() {
