@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+.swiftpm/
+xcuserdata/
+*.app
+.claude/ralph-loop.local.md
