@@ -193,9 +193,9 @@ final class HotkeyListener {
         // Number keys 1-9 (top row: keycodes 18-21, 23, 22, 26, 28, 25)
         if let cellIndex = cellIndexForKeyCode(keyCode) {
             DispatchQueue.main.async { [weak self] in
-                // cellIndex is 1-9, map to row/col: row = (index-1)/3, col = (index-1)%3
-                let row = (cellIndex - 1) / 3
-                let col = (cellIndex - 1) % 3
+                // cellIndex is 0-based (0-8), map to row/col
+                let row = cellIndex / 3
+                let col = cellIndex % 3
                 _ = self?.gridModel.moveTo(row: row, col: col)
             }
             return nil // swallow the event
