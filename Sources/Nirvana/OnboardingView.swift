@@ -68,6 +68,7 @@ struct OnboardingView: View {
         }
         .frame(width: 500, height: 520)
         .onAppear {
+            refreshSpaceCount()
             checkPermissions()
         }
     }
@@ -275,8 +276,8 @@ struct OnboardingView: View {
 
     private func refreshSpaceCount() {
         let bridge = SpaceBridge(gridModel: gridModel)
-        let spaces = bridge.listSpaceIDs()
-        detectedSpaceCount = max(spaces.count, 1) // At least 1 space always exists
+        let allSpaces = bridge.listAllSpaceEntries()
+        detectedSpaceCount = max(allSpaces, 1) // At least 1 space always exists
     }
 
     private func checkPermissions() {
@@ -295,7 +296,15 @@ struct OnboardingView: View {
     }
 
     private func requestScreenRecording() {
-        CGRequestScreenCaptureAccess()
+        // CGRequestScreenCaptureAccess() only shows a prompt on first call ever.
+        // After that, we need to open System Settings directly.
+        if !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+            // Also open System Settings to the Screen Recording pane directly
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
         // Re-check after a delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             checkPermissions()

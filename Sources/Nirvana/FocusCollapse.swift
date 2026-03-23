@@ -76,6 +76,7 @@ final class FocusCollapseAnimator: ObservableObject {
 
     private var selectedRow: Int = 0
     private var selectedCol: Int = 0
+    private var collapseGeneration: Int = 0
 
     // MARK: - Init
 
@@ -91,6 +92,7 @@ final class FocusCollapseAnimator: ObservableObject {
 
     /// Reset all cells to their default (idle) animation state.
     func resetToIdle(config: [[Bool]]? = nil) {
+        collapseGeneration += 1
         state = .idle
         for row in 0..<3 {
             for col in 0..<3 {
@@ -106,25 +108,35 @@ final class FocusCollapseAnimator: ObservableObject {
     func beginCollapse(selectedRow: Int, selectedCol: Int) {
         self.selectedRow = selectedRow
         self.selectedCol = selectedCol
+        collapseGeneration += 1
+        let gen = collapseGeneration
 
         // Phase 1: Focus
         enterFocusPhase()
 
         // Phase 2: Separation (after focus completes)
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.focus) { [weak self] in
-            self?.enterSeparationPhase()
+            guard let self, self.collapseGeneration == gen else { return }
+            self.enterSeparationPhase()
         }
 
         // Phase 3: Resolve (after separation completes)
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.focus + Timing.separation) { [weak self] in
-            self?.enterResolvePhase()
+            guard let self, self.collapseGeneration == gen else { return }
+            self.enterResolvePhase()
         }
 
         // Completed
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.focus + Timing.separation + Timing.resolve) { [weak self] in
-            self?.state = .completed
-            self?.onComplete?()
+            guard let self, self.collapseGeneration == gen else { return }
+            self.state = .completed
+            self.onComplete?()
         }
+    }
+
+    /// Cancel any in-progress collapse animation.
+    func cancelCollapse() {
+        collapseGeneration += 1
     }
 
     // MARK: - Phase Implementations

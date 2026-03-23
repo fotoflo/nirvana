@@ -4,24 +4,13 @@ import AppKit
 // MARK: - Design Constants
 
 private enum PagerColors {
-    static let indigo = Color(hex: 0x1a1a2e)
-    static let gold = Color(hex: 0xc9a84c)
-    static let goldGlow = Color(hex: 0xe8b84b).opacity(0.33)
-    static let softWhite = Color(hex: 0xe8e8e8)
+    static let indigo = Color.nirvanaIndigo
+    static let gold = Color.nirvanaGold
+    static let goldGlow = Color.nirvanaGlow
+    static let softWhite = Color.nirvanaText
     static let cellBackground = Color.white.opacity(0.06)
     static let disabledBorder = Color.white.opacity(0.15)
     static let enabledBorder = Color.white.opacity(0.3)
-}
-
-// MARK: - Color Extension
-
-extension Color {
-    init(hex: UInt32, alpha: Double = 1.0) {
-        let r = Double((hex >> 16) & 0xFF) / 255.0
-        let g = Double((hex >> 8) & 0xFF) / 255.0
-        let b = Double(hex & 0xFF) / 255.0
-        self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
-    }
 }
 
 // MARK: - PagerOverlayView
@@ -40,11 +29,10 @@ struct PagerOverlayView: View {
 
     var body: some View {
         ZStack {
-            // Background: deep indigo with frosted glass
-            PagerColors.indigo
-                .opacity(0.85)
+            // Background: procedural cloud shader over frosted glass
+            CloudBackgroundView()
                 .ignoresSafeArea()
-                .background(.ultraThinMaterial)
+                .opacity(0.85)
 
             // Grid
             VStack(spacing: 12) {
@@ -161,6 +149,7 @@ struct PagerCellView: View {
     let animState: CellAnimationState
 
     @State private var isHovering: Bool = false
+    @State private var isBreathing: Bool = false
 
     /// Cell number (1-9), displayed bottom-right.
     private var cellNumber: Int {
@@ -179,6 +168,12 @@ struct PagerCellView: View {
                         PagerColors.disabledBorder,
                         style: StrokeStyle(lineWidth: 1, dash: [4, 4])
                     )
+                    .opacity(isBreathing ? 0.6 : 1.0)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                            isBreathing = true
+                        }
+                    }
             }
 
             // Thumbnail or app-icon fallback
@@ -190,10 +185,9 @@ struct PagerCellView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .padding(2)
                 } else {
-                    // Fallback: show grid icon placeholder
-                    Image(systemName: "square.grid.3x3")
-                        .font(.system(size: 24, weight: .light))
-                        .foregroundColor(PagerColors.softWhite.opacity(0.3))
+                    // Fallback: show running app icons (graceful degradation
+                    // when Screen Recording permission isn't granted)
+                    AppIconFallbackView()
                 }
             }
 
@@ -252,5 +246,40 @@ struct PagerCellView: View {
 
     private var borderWidth: CGFloat {
         isSelected ? 2 : 1
+    }
+}
+
+// MARK: - AppIconFallbackView
+
+/// Shows icons of running applications when Screen Recording isn't available.
+struct AppIconFallbackView: View {
+    var body: some View {
+        let apps = runningAppIcons()
+        VStack(spacing: 4) {
+            // Show up to 4 app icons in a 2x2 grid
+            let rows = stride(from: 0, to: min(apps.count, 4), by: 2).map { i in
+                Array(apps[i..<min(i + 2, min(apps.count, 4))])
+            }
+            ForEach(0..<rows.count, id: \.self) { rowIdx in
+                HStack(spacing: 4) {
+                    ForEach(0..<rows[rowIdx].count, id: \.self) { colIdx in
+                        Image(nsImage: rows[rowIdx][colIdx])
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                    }
+                }
+            }
+            if apps.count > 4 {
+                Text("+\(apps.count - 4)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(PagerColors.softWhite.opacity(0.5))
+            }
+        }
+    }
+
+    private func runningAppIcons() -> [NSImage] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { $0.icon }
     }
 }

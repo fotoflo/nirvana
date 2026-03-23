@@ -15,6 +15,10 @@ final class PagerOverlayController {
 
     private var window: NSWindow?
     private var isVisible: Bool = false
+    private var positionObserver: NSObjectProtocol?
+
+    /// Called after Focus Collapse completes so the app can switch the macOS Space.
+    var onSpaceSelected: ((Int, Int) -> Void)?
 
     // MARK: - Init
 
@@ -33,6 +37,11 @@ final class PagerOverlayController {
     /// Show the pager overlay with a fade-in animation.
     func show() {
         guard !isVisible else { return }
+
+        // Clean up any stale window from a previous session (e.g., rapid toggle).
+        if window != nil {
+            tearDownWindow()
+        }
 
         // Cache the current workspace thumbnail before showing the overlay.
         if let spaceID = gridModel.currentSpaceID {
@@ -93,22 +102,36 @@ final class PagerOverlayController {
 
         self.window = window
         isVisible = true
+
+        // Keep highlight in sync when arrow keys move the grid position.
+        positionObserver = NotificationCenter.default.addObserver(
+            forName: .gridPositionChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isVisible else { return }
+            self.viewModel.highlightedRow = self.gridModel.currentRow
+            self.viewModel.highlightedCol = self.gridModel.currentCol
+        }
     }
 
     // MARK: - Dismiss with Focus Collapse
 
     /// Trigger the Focus Collapse animation on the currently highlighted cell, then dismiss.
     func dismissWithFocusCollapse() {
-        guard isVisible else { return }
+        guard isVisible, window != nil else {
+            // If window is already gone, just reset state.
+            isVisible = false
+            return
+        }
 
         let row = viewModel.highlightedRow
         let col = viewModel.highlightedCol
 
-        // Move GridModel to the selected cell.
-        gridModel.moveTo(row: row, col: col)
-
-        // Start the 3-phase animation.
-        animator.beginCollapse(selectedRow: row, selectedCol: col)
+        // Move grid to highlighted cell and start collapse animation.
+        // When collapse completes, finalizeCollapse() fires onSpaceSelected
+        // and holds the overlay to mask the macOS swoosh.
+        selectCell(row: row, col: col)
     }
 
     /// Simple fade-out dismiss without Focus Collapse.
@@ -147,18 +170,29 @@ final class PagerOverlayController {
         guard isVisible else { return }
         isVisible = false
 
-        // Quick fade to black then close.
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.1
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            window?.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.tearDownWindow()
-        })
+        // Notify the app to switch the actual macOS Space.
+        let row = viewModel.highlightedRow
+        let col = viewModel.highlightedCol
+        onSpaceSelected?(row, col)
+
+        // Hold overlay to mask the swoosh, then fade out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                self?.window?.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                self?.tearDownWindow()
+            })
+        }
     }
 
     /// Remove the window entirely.
     private func tearDownWindow() {
+        if let observer = positionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            positionObserver = nil
+        }
         window?.orderOut(nil)
         window?.contentView = nil
         window = nil

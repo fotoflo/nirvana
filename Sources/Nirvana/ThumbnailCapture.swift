@@ -67,24 +67,37 @@ final class ThumbnailCapture: ThumbnailCapturing {
         }
     }
 
+    /// Maximum thumbnail dimension (longest side). Keeps memory usage reasonable
+    /// when caching up to 9 workspace screenshots.
+    private let maxThumbnailSize: CGFloat = 400
+
     func captureCurrentWorkspace() -> NSImage? {
         guard hasPermission else { return nil }
 
-        // Capture the entire main display.
+        // Capture the entire main display at nominal (1x) resolution to save memory.
         guard let cgImage = CGWindowListCreateImage(
             CGRect.null,                           // null = entire display
             .optionOnScreenOnly,                   // only visible windows
-            kCGNullWindowID,                       // all windows
-            [.bestResolution, .boundsIgnoreFraming]
+            kCGNullWindowID,                       // [.boundsIgnoreFraming] — skip .bestResolution for smaller images
+            [.boundsIgnoreFraming]
         ) else {
             return nil
         }
 
-        let image = NSImage(cgImage: cgImage, size: NSSize(
-            width: cgImage.width,
-            height: cgImage.height
-        ))
-        return image
+        // Downscale to thumbnail size for the pager grid.
+        let srcW = CGFloat(cgImage.width)
+        let srcH = CGFloat(cgImage.height)
+        let scale = min(maxThumbnailSize / max(srcW, 1), maxThumbnailSize / max(srcH, 1), 1.0)
+        let thumbW = srcW * scale
+        let thumbH = srcH * scale
+
+        let thumbnail = NSImage(size: NSSize(width: thumbW, height: thumbH))
+        thumbnail.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        NSImage(cgImage: cgImage, size: NSSize(width: srcW, height: srcH))
+            .draw(in: NSRect(x: 0, y: 0, width: thumbW, height: thumbH))
+        thumbnail.unlockFocus()
+        return thumbnail
     }
 
     // MARK: - Cache Management

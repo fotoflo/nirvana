@@ -137,14 +137,7 @@ struct ConfigView: View {
 // MARK: - Grid Tab
 
 private struct GridTabView: View {
-    // Local state; in production this would bind to GridModel
-    @State private var cells: [[Bool]] = [
-        [true, true, true],
-        [true, true, false],
-        [false, false, false],
-    ]
-    @State private var currentRow = 0
-    @State private var currentCol = 0
+    @ObservedObject private var gridModel = GridModel.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -156,9 +149,9 @@ private struct GridTabView: View {
                 .font(.caption)
                 .foregroundColor(Color.nirvanaText.opacity(0.6))
 
-            // 3x3 grid
+            // 3x3 grid — row 2 at top so spatial orientation matches the pager
             VStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { row in
+                ForEach((0..<3).reversed(), id: \.self) { row in
                     HStack(spacing: 6) {
                         ForEach(0..<3, id: \.self) { col in
                             gridCell(row: row, col: col)
@@ -182,14 +175,12 @@ private struct GridTabView: View {
     }
 
     private func gridCell(row: Int, col: Int) -> some View {
-        let isCurrent = row == currentRow && col == currentCol
-        let isEnabled = cells[row][col]
-        let spaceIndex = spaceNumber(row: row, col: col)
+        let isCurrent = row == gridModel.currentRow && col == gridModel.currentCol
+        let isEnabled = gridModel.config.isEnabled(row: row, col: col)
+        let spaceNum = row * 3 + col + 1
 
         return Button(action: {
-            // Don't allow disabling the current cell
-            guard !(row == currentRow && col == currentCol) else { return }
-            cells[row][col].toggle()
+            gridModel.toggleCell(row: row, col: col)
         }) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
@@ -208,28 +199,17 @@ private struct GridTabView: View {
                             )
                     )
 
-                if isEnabled {
-                    Text(spaceIndex != nil ? "\(spaceIndex!)" : "")
-                        .font(.title2.monospacedDigit())
-                        .foregroundColor(isCurrent ? .nirvanaGold : Color.nirvanaText.opacity(0.5))
-                }
+                Text("\(spaceNum)")
+                    .font(.title2.monospacedDigit())
+                    .foregroundColor(
+                        isCurrent ? .nirvanaGold
+                        : isEnabled ? Color.nirvanaText.opacity(0.5)
+                        : Color.nirvanaText.opacity(0.15)
+                    )
             }
             .frame(width: 72, height: 56)
         }
         .buttonStyle(.plain)
-    }
-
-    /// Returns the 1-based Space index for an enabled cell, or nil if disabled.
-    private func spaceNumber(row: Int, col: Int) -> Int? {
-        guard cells[row][col] else { return nil }
-        var index = 1
-        for r in 0..<3 {
-            for c in 0..<3 {
-                if r == row && c == col { return index }
-                if cells[r][c] { index += 1 }
-            }
-        }
-        return nil
     }
 
     private func legendItem(color: Color, label: String) -> some View {

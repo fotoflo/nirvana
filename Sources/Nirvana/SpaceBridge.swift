@@ -8,6 +8,7 @@ import os.log
 // They may break across macOS versions. Use with caution.
 
 private let skylight: UnsafeMutableRawPointer? = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
+private let coreGraphicsLib: UnsafeMutableRawPointer? = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY)
 
 private typealias CGSDefaultConnectionFunc = @convention(c) () -> Int
 private typealias CGSGetActiveSpaceFunc = @convention(c) (Int) -> Int
@@ -15,9 +16,35 @@ private typealias CGSManagedDisplayGetCurrentSpaceFunc = @convention(c) (Int, CF
 private typealias CGSCopyManagedDisplaySpacesFunc = @convention(c) (Int) -> CFArray
 
 private func CGSDefaultConnection() -> Int {
-    guard let handle = skylight,
-          let sym = dlsym(handle, "CGSDefaultConnection") else { return 0 }
-    return unsafeBitCast(sym, to: CGSDefaultConnectionFunc.self)()
+    // Try multiple function names across SkyLight and CoreGraphics
+    let names = ["CGSMainConnectionID", "_CGSDefaultConnection", "CGSDefaultConnection"]
+    let handles = [skylight, coreGraphicsLib].compactMap { $0 }
+
+    for handle in handles {
+        for name in names {
+            if let sym = dlsym(handle, name) {
+                let result = unsafeBitCast(sym, to: CGSDefaultConnectionFunc.self)()
+                if result != 0 {
+                    NSLog("[SpaceBridge] CGSDefaultConnection resolved via \(name) = \(result)")
+                    return result
+                }
+            }
+        }
+    }
+
+    // Also try RTLD_DEFAULT (search all loaded libraries)
+    for name in names {
+        if let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) { // RTLD_DEFAULT
+            let result = unsafeBitCast(sym, to: CGSDefaultConnectionFunc.self)()
+            if result != 0 {
+                NSLog("[SpaceBridge] CGSDefaultConnection resolved via RTLD_DEFAULT/\(name) = \(result)")
+                return result
+            }
+        }
+    }
+
+    NSLog("[SpaceBridge] All CGSDefaultConnection variants returned 0")
+    return 0
 }
 
 private func CGSGetActiveSpace(_ conn: Int) -> Int {
@@ -115,7 +142,9 @@ final class SpaceBridge: SpaceSwitching {
         if let mainScreen = NSScreen.main,
            let displayID = mainScreen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
             let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)
-            if let uuidString = CFUUIDCreateString(nil, uuid?.takeUnretainedValue()) {
+            // takeRetainedValue() because CGDisplayCreateUUIDFromDisplayID follows the Create Rule (+1).
+            if let cfuuid = uuid?.takeRetainedValue(),
+               let uuidString = CFUUIDCreateString(nil, cfuuid) {
                 let spaceID = CGSManagedDisplayGetCurrentSpace(conn, uuidString)
                 if spaceID > 0 {
                     return spaceID
@@ -135,20 +164,40 @@ final class SpaceBridge: SpaceSwitching {
 
     /// Switch to a macOS Space by its space ID.
     ///
-    /// Modern macOS restricts direct space switching via private API, so this method
-    /// attempts the CGS route first and falls back to keyboard simulation (ctrl+number).
+    /// Uses CGEvent to post ctrl+N keystrokes, which triggers the standard
+    /// macOS space switch through the Dock. This correctly leaves windows
+    /// on their original spaces. Requires ctrl+number shortcuts enabled in
+    /// System Settings > Keyboard > Keyboard Shortcuts > Mission Control.
     func switchToSpace(_ spaceID: Int) {
-        // Determine the 1-based index of the target space
         let spaces = listSpaceIDs()
-        guard let index = spaces.firstIndex(of: spaceID) else {
-            logger.error("Space ID \(spaceID) not found in known spaces")
+        guard let targetIndex = spaces.firstIndex(of: spaceID) else {
+            logger.error("switchToSpace: space \(spaceID) not found in \(spaces)")
             return
         }
-        let oneBasedIndex = index + 1
 
-        // TODO: Direct CGS space switching (CGSSetWorkspace / SLSActivateSpace) is
-        // unreliable on macOS 12+. We go straight to the keyboard-simulation fallback.
-        switchViaKeyboardSimulation(spaceNumber: oneBasedIndex)
+        let spaceNumber = targetIndex + 1  // 1-based
+        let keyCodes: [Int: CGKeyCode] = [1:18, 2:19, 3:20, 4:21, 5:23, 6:22, 7:26, 8:28, 9:25]
+        guard spaceNumber <= 9, let keyCode = keyCodes[spaceNumber] else {
+            logger.error("switchToSpace: space number \(spaceNumber) out of range")
+            return
+        }
+
+        logger.info("switchToSpace: → space \(spaceID) (ctrl+\(spaceNumber))")
+
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
+            logger.error("switchToSpace: failed to create CGEvent")
+            return
+        }
+
+        // Mark events so our own event tap ignores them.
+        keyDown.setIntegerValueField(.eventSourceUserData, value: HotkeyListener.selfGeneratedMarker)
+        keyUp.setIntegerValueField(.eventSourceUserData, value: HotkeyListener.selfGeneratedMarker)
+
+        keyDown.flags = .maskControl
+        keyUp.flags = .maskControl
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
     }
 
     /// Returns an ordered list of all user-created (non-fullscreen) space IDs on the
@@ -160,24 +209,60 @@ final class SpaceBridge: SpaceSwitching {
             return []
         }
 
-        let displaysInfo = CGSCopyManagedDisplaySpaces(conn) as? [[String: Any]] ?? []
+        NSLog("[SpaceBridge] Connection: \(conn)")
+
+        let raw = CGSCopyManagedDisplaySpaces(conn)
+        NSLog("[SpaceBridge] Raw result type: \(type(of: raw)), count: \(CFArrayGetCount(raw))")
+
+        guard let displaysInfo = raw as? [[String: Any]] else {
+            // Try alternative cast
+            if let altCast = raw as? [Any] {
+                NSLog("[SpaceBridge] Alternative cast succeeded with \(altCast.count) items")
+                for (i, item) in altCast.enumerated() {
+                    NSLog("[SpaceBridge] Item \(i) type: \(type(of: item))")
+                    if let dict = item as? [String: Any] {
+                        NSLog("[SpaceBridge] Item \(i) keys: \(dict.keys.sorted())")
+                    }
+                }
+            }
+            NSLog("[SpaceBridge] CGSCopyManagedDisplaySpaces returned unexpected format")
+            return []
+        }
+
         var ids: [Int] = []
 
         for display in displaysInfo {
-            guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
+            guard let spaces = display["Spaces"] as? [[String: Any]] else {
+                logger.info("Display entry has no 'Spaces' key. Keys: \(display.keys.sorted())")
+                continue
+            }
+
+            logger.info("Found \(spaces.count) space entries on display")
+
             for space in spaces {
-                // Type 0 = user space, Type 4 = fullscreen space
-                // We only care about user spaces for the grid.
-                if let id64 = space["id64"] as? Int, let type = space["type"] as? Int, type == 0 {
-                    ids.append(id64)
-                } else if let managedSpaceID = space["ManagedSpaceID"] as? Int, let type = space["type"] as? Int, type == 0 {
-                    ids.append(managedSpaceID)
+                let type = space["type"] as? Int
+                let id64 = space["id64"] as? Int
+                let managedSpaceID = space["ManagedSpaceID"] as? Int
+                let spaceID = id64 ?? managedSpaceID ?? 0
+
+                NSLog("[SpaceBridge] Space entry: id64=\(id64 ?? -1) ManagedSpaceID=\(managedSpaceID ?? -1) type=\(type ?? -1) keys=\(space.keys.sorted())")
+
+                // Include all spaces: user (type 0), fullscreen (type 4), and unknown types
+                if spaceID > 0 {
+                    ids.append(spaceID)
                 }
             }
         }
 
+        logger.info("listSpaceIDs found \(ids.count) spaces: \(ids)")
         spaceIDMap = ids
         return ids
+    }
+
+    /// Returns the total count of all space entries (including fullscreen).
+    /// Used by onboarding to show how many spaces the user has.
+    func listAllSpaceEntries() -> Int {
+        return listSpaceIDs().count
     }
 
     // MARK: - Detection
@@ -221,50 +306,8 @@ final class SpaceBridge: SpaceSwitching {
         gridModel.moveTo(row: cell.row, col: cell.col)
     }
 
-    /// Simulates ctrl+<number> keypress to switch to a Space by its Mission Control index.
-    /// Requires Accessibility permissions (System Settings > Privacy > Accessibility).
-    private func switchViaKeyboardSimulation(spaceNumber: Int) {
-        // TODO: This requires the user to have ctrl+number shortcuts enabled in
-        // System Settings > Keyboard > Keyboard Shortcuts > Mission Control.
-        // Also requires Accessibility permission for CGEvent posting.
-
-        guard (1...9).contains(spaceNumber) else {
-            logger.warning("Cannot simulate keyboard switch to space \(spaceNumber) — only 1-9 supported")
-            return
-        }
-
-        // Key codes for numbers 1-9 on US keyboard layout
-        let keyCodes: [Int: UInt16] = [
-            1: 0x12, // 1
-            2: 0x13, // 2
-            3: 0x14, // 3
-            4: 0x15, // 4
-            5: 0x17, // 5
-            6: 0x16, // 6
-            7: 0x1A, // 7
-            8: 0x1C, // 8
-            9: 0x19, // 9
-        ]
-
-        guard let keyCode = keyCodes[spaceNumber] else { return }
-
-        let source = CGEventSource(stateID: .hidSystemState)
-
-        // ctrl + number key
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
-            logger.error("Failed to create CGEvent for space switch keyboard simulation")
-            return
-        }
-
-        keyDown.flags = .maskControl
-        keyUp.flags = .maskControl
-
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-
-        logger.info("Simulated ctrl+\(spaceNumber) to switch space")
-    }
+    // Space switching uses CGEvent ctrl+N keystrokes — see switchToSpace(_:).
+    // CGSManagedDisplaySetCurrentSpace was tried but drags focused windows along.
 }
 
 // MARK: - Notifications

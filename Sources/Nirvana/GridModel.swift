@@ -48,7 +48,7 @@ final class GridModel: ObservableObject {
 
     // MARK: Singleton
 
-    static let shared = GridModel()
+    static let shared = GridModel(loadFromDisk: true)
 
     // MARK: Published State
 
