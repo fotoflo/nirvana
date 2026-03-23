@@ -20,9 +20,10 @@ Phase                   Time     Count
 Build                   3s       0 errors, 0 warnings
 Unit tests              2s       51 passed, 0 failed
 Smoke test              5s       7 passed, 0 failed
-Update CLAUDE.md        4s       1 section updated
+Architecture docs       4s       1 updated, 1 created
+Update CLAUDE.md        2s       1 section updated
 Commit                  2s       1 commit, 5 files staged
-Report                  1s       session renamed
+Report                  1s       session complete
 ───────────────────────────────────────
 Total                   17s
 ```
@@ -79,17 +80,33 @@ Areas touched:        SpaceBridge, HotkeyListener
    - If it fails, the space switching code is broken — investigate before committing.
    - Report passed/failed count.
 
-### Phase 4: Update CLAUDE.md
+### Phase 4: Update Architecture Docs
 
-4. **Check if CLAUDE.md needs updating** — based on the session's changes:
+4. **Identify affected areas** — based on files changed this session, determine which feature areas were modified.
+
+5. **Check existing docs** — run `ls docs/architecture/` to see what exists:
+   - If a doc exists for the affected area, read it and update it to reflect the current state
+   - If no doc exists and the session touched non-trivial logic in that area, create one
+
+6. **Write/update docs** — each architecture doc in `docs/architecture/` should include:
+   - **Overview**: What this feature/area does
+   - **Key files**: File paths and their roles
+   - **Data flow**: How data moves through the system
+   - **Important patterns**: Conventions, gotchas, or design decisions
+   - Focus on the CURRENT state, not history of changes
+   - Skip this phase if only trivial changes were made (typos, formatting)
+
+### Phase 5: Update CLAUDE.md
+
+7. **Check if CLAUDE.md needs updating** — based on the session's changes:
    - If architecture changed (new files, new patterns, new APIs), update the relevant sections
    - If build commands changed, update the build section
    - If key decisions changed, update those
    - If nothing material changed, skip this phase
 
-### Phase 5: Commit
+### Phase 6: Commit
 
-5. Stage all relevant changed files and commit.
+8. Stage all relevant changed files and commit.
    - If $ARGUMENTS is provided, use it as the first line of the commit message
    - Otherwise, draft a summary of the session's changes as the first line
    - Append the session productivity summary to the commit body
@@ -108,13 +125,13 @@ Areas touched:        SpaceBridge, HotkeyListener
      Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
      ```
 
-6. Run `git status` to confirm everything is clean.
+9. Run `git status` to confirm everything is clean.
 
-### Phase 6: Report
+### Phase 7: Report
 
-7. Output the `/done summary` table and `Session productivity` block (see above).
+10. Output the `/done summary` table and `Session productivity` block (see above).
 
-8. **Goodbye message** — end with a short celebratory message about what was accomplished.
+11. **Goodbye message** — end with a short celebratory message about what was accomplished.
 
 ## Rules
 
