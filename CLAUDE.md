@@ -23,6 +23,9 @@ swift test
 
 # Run a single test
 swift test --filter NirvanaTests.GridModelTests/testMoveRight
+
+# Smoke test (actually switches spaces — needs Accessibility permission)
+swift Scripts/smoke_test_switching.swift
 ```
 
 This is a Swift Package Manager project (no Xcode project file). Platform target is macOS 13+.
@@ -33,8 +36,8 @@ This is a Swift Package Manager project (no Xcode project file). Platform target
 
 **Data flow:** `GridModel` is the central shared state (singleton via `GridModel.shared`). It's an `ObservableObject` that publishes position and config changes via `@Published` properties AND `NotificationCenter` (`.gridPositionChanged`, `.gridConfigChanged`). Other components observe it:
 
-- `SpaceBridge` — syncs grid position ↔ macOS Spaces. Uses private `CGSConnection` APIs loaded at runtime via `dlsym` from `SkyLight.framework`. Space switching uses `NSAppleScript` to send `ctrl+N` keystrokes.
-- `HotkeyListener` — global input via `CGEventTap` (with `NSEvent.addGlobalMonitorForEvents` fallback). Handles: alt-hold (200ms) → show pager, arrow keys → navigate, alt-release → Focus Collapse. Also handles 3/4-finger swipe gestures.
+- `SpaceBridge` — syncs grid position ↔ macOS Spaces. Uses private `CGSConnection` APIs loaded at runtime via `dlsym` from `SkyLight.framework`. Space switching uses `CGEvent` to post `ctrl+N` keystrokes (goes through Dock, leaves windows in place). Never use `CGSManagedDisplaySetCurrentSpace` — it drags focused windows.
+- `HotkeyListener` — global input via `CGEventTap` (with `NSEvent.addGlobalMonitorForEvents` fallback). Handles: Caps Lock hold (200ms) → show pager, arrow keys → navigate, Caps Lock release → Focus Collapse. Trigger key is centralized in `triggerKeyCode`. Also handles 3/4-finger swipe gestures.
 - `PagerOverlayController` — manages the borderless fullscreen `NSWindow` hosting the SwiftUI pager overlay. Coordinates with `FocusCollapseAnimator` and calls back to `AppDelegate` for actual space switching.
 - `TeleportFlashController` — shows mini-pager flash on external space changes (cmd-tab).
 
