@@ -3,36 +3,21 @@ import CoreGraphics
 
 // MARK: - HotkeyListener
 
-/// Listens for global hotkeys (Caps Lock hold + arrows/numbers) and 3-finger swipe
-/// gestures to drive the spatial pager.
+/// Listens for global hotkeys (trigger key hold + arrows/numbers) and 3-finger swipe
+/// gestures to drive the spatial pager. Trigger key is configurable via config.json
+/// (default: F13, keycode 105 — remapped from Caps Lock via hidutil).
 ///
-/// - Caps Lock hold ≥ 200 ms → show pager overlay
-/// - Arrow keys while Caps Lock held → navigate grid
-/// - Number keys 1-9 while Caps Lock held → jump to cell
-/// - Caps Lock release → dismiss pager (triggers Focus Collapse)
+/// - Trigger hold ≥ 200 ms → show pager overlay
+/// - Arrow keys while trigger held → navigate grid
+/// - Number keys 1-9 while trigger held → jump to cell
+/// - Trigger release → dismiss pager (triggers Focus Collapse)
 /// - 3-finger swipe → navigate grid + flash pager for 500 ms
 final class HotkeyListener {
 
     // MARK: - Trigger Key Configuration
 
-    /// The keycode that activates the pager (57 = Caps Lock).
-    /// Change this single value to rebind the trigger key.
-    private static let triggerKeyCode: Int64 = 57
-
-    /// Returns true if the trigger key is currently pressed, based on CGEvent flags.
-    private static func isTriggerDown(flags: CGEventFlags) -> Bool {
-        flags.contains(.maskAlphaShift)
-    }
-
-    /// Returns true if an NSEvent is the trigger key being pressed.
-    private static func isTriggerDown(event: NSEvent) -> Bool {
-        event.keyCode == UInt16(triggerKeyCode) && event.modifierFlags.contains(.capsLock)
-    }
-
-    /// Returns true if an NSEvent is the trigger key being released.
-    private static func isTriggerUp(event: NSEvent) -> Bool {
-        event.keyCode == UInt16(triggerKeyCode) && !event.modifierFlags.contains(.capsLock)
-    }
+    /// The keycode that activates the pager, read from GridConfig (default: 105 = F13).
+    private let triggerKeyCode: Int64
 
     // MARK: - Public properties
 
@@ -89,6 +74,7 @@ final class HotkeyListener {
 
     init(gridModel: GridModel) {
         self.gridModel = gridModel
+        self.triggerKeyCode = gridModel.config.triggerKeyCode
     }
 
     deinit {
@@ -126,7 +112,8 @@ final class HotkeyListener {
 
         let eventMask: CGEventMask =
             (1 << CGEventType.flagsChanged.rawValue) |
-            (1 << CGEventType.keyDown.rawValue)
+            (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue)
 
         let unmanagedSelf = Unmanaged.passUnretained(self).toOpaque()
 
@@ -180,19 +167,30 @@ final class HotkeyListener {
     // MARK: - NSEvent Global Monitors (fallback)
 
     private func installGlobalMonitors() {
+        // Flags monitor: fallback for modifier-based trigger keys (e.g. Caps Lock).
         flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             guard let self else { return }
-            guard event.keyCode == UInt16(Self.triggerKeyCode) else { return }
-            let down = Self.isTriggerDown(event: event)
+            guard event.keyCode == UInt16(self.triggerKeyCode) else { return }
+            let down = !self.isTriggerHeld
             self.debugLog("flagsChanged: triggerDown=\(down) code=\(event.keyCode) mods=0x\(String(event.modifierFlags.rawValue, radix: 16))")
             self.handleTriggerKeyChanged(isDown: down)
         }
 
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // Key monitors: handle trigger key down/up and action keys.
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self else { return }
-            self.debugLog("keyDown: code=\(event.keyCode) held=\(self.isTriggerHeld) pager=\(self.isPagerVisible)")
-            guard self.isTriggerHeld, self.isPagerVisible else { return }
-            self.handleActionKey(keyCode: Int64(event.keyCode))
+            let code = Int64(event.keyCode)
+            if code == self.triggerKeyCode {
+                let isDown = event.type == .keyDown
+                self.debugLog("trigger(\(isDown ? "keyDown" : "keyUp")): code=\(event.keyCode)")
+                self.handleTriggerKeyChanged(isDown: isDown)
+                return
+            }
+            if event.type == .keyDown {
+                self.debugLog("keyDown: code=\(event.keyCode) held=\(self.isTriggerHeld) pager=\(self.isPagerVisible)")
+                guard self.isTriggerHeld, self.isPagerVisible else { return }
+                self.handleActionKey(keyCode: code)
+            }
         }
 
         NSLog("[HotkeyListener] Global NSEvent monitors installed: flags=%@, key=%@",
@@ -225,21 +223,33 @@ final class HotkeyListener {
             return event
         }
 
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
         switch type {
         case .flagsChanged:
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            if keyCode == Self.triggerKeyCode {
-                let isDown = Self.isTriggerDown(flags: event.flags)
-                NSLog("[HotkeyListener] trigger: down=%d flags=0x%llx", isDown ? 1 : 0, event.flags.rawValue)
+            // Legacy path: only needed if trigger is a modifier key (e.g. Caps Lock keycode 57).
+            if keyCode == triggerKeyCode {
+                let isDown = !isTriggerHeld
+                NSLog("[HotkeyListener] trigger(flags): down=%d flags=0x%llx", isDown ? 1 : 0, event.flags.rawValue)
                 handleTriggerKeyChanged(isDown: isDown)
-                return nil  // Swallow trigger key — prevent native behavior
+                return nil
             }
         case .keyDown:
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            if keyCode == triggerKeyCode {
+                NSLog("[HotkeyListener] trigger(keyDown): code=%d", keyCode)
+                handleTriggerKeyChanged(isDown: true)
+                return nil  // Swallow trigger key
+            }
             NSLog("[HotkeyListener] keyDown: code=%d held=%d pager=%d", keyCode, isTriggerHeld ? 1 : 0, isPagerVisible ? 1 : 0)
             if isTriggerHeld && isPagerVisible {
                 handleActionKey(keyCode: keyCode)
                 return nil  // Swallow keys while pager is open
+            }
+        case .keyUp:
+            if keyCode == triggerKeyCode {
+                NSLog("[HotkeyListener] trigger(keyUp): code=%d", keyCode)
+                handleTriggerKeyChanged(isDown: false)
+                return nil  // Swallow trigger key
             }
         default:
             break

@@ -37,7 +37,7 @@ This is a Swift Package Manager project (no Xcode project file). Platform target
 **Data flow:** `GridModel` is the central shared state (singleton via `GridModel.shared`). It's an `ObservableObject` that publishes position and config changes via `@Published` properties AND `NotificationCenter` (`.gridPositionChanged`, `.gridConfigChanged`). Other components observe it:
 
 - `SpaceBridge` — syncs grid position ↔ macOS Spaces. Uses private `CGSConnection` APIs loaded at runtime via `dlsym` from `SkyLight.framework`. Space switching uses `CGEvent` to post `ctrl+N` keystrokes (goes through Dock, leaves windows in place). Never use `CGSManagedDisplaySetCurrentSpace` — it drags focused windows.
-- `HotkeyListener` — global input via `CGEventTap` (with `NSEvent.addGlobalMonitorForEvents` fallback). Handles: Caps Lock hold (200ms) → show pager, arrow keys → navigate, Caps Lock release → Focus Collapse. Trigger key is centralized in `triggerKeyCode`. Also handles 3/4-finger swipe gestures.
+- `HotkeyListener` — global input via `CGEventTap` (with `NSEvent.addGlobalMonitorForEvents` fallback). Handles: trigger key hold (200ms) → show pager, arrow keys → navigate, trigger release → Focus Collapse. Trigger keycode is configurable via `GridConfig.triggerKeyCode` (persisted in config.json, default: 105 = F13). Supports both regular keys (keyDown/keyUp) and modifier keys (flagsChanged). Also handles 3/4-finger swipe gestures.
 - `PagerOverlayController` — manages the borderless fullscreen `NSWindow` hosting the SwiftUI pager overlay. Coordinates with `FocusCollapseAnimator` and calls back to `AppDelegate` for actual space switching.
 - `TeleportFlashController` — shows mini-pager flash on external space changes (cmd-tab).
 
@@ -45,7 +45,7 @@ This is a Swift Package Manager project (no Xcode project file). Platform target
 
 **Focus Collapse animation:** 3-phase sequence (Focus 150ms → Separation 250ms → Resolve 300ms) driven by `FocusCollapseAnimator`. Uses a generation counter to cancel stale animations. After resolve, the overlay holds for 600ms to mask the macOS space-switch swoosh.
 
-**Config persistence:** Grid config saved as JSON to `~/.config/nirvana/config.json`. First-launch state tracked via `UserDefaults` key `nirvana.onboardingCompleted`.
+**Config persistence:** Grid config (cell layout + trigger keycode) saved as JSON to `~/.config/nirvana/config.json`. First-launch state tracked via `UserDefaults` key `nirvana.onboardingCompleted`.
 
 **Protocols for testability:** `SpaceSwitching` (for SpaceBridge), `ThumbnailCapturing` (for ThumbnailCapture) — mock implementations exist for tests.
 

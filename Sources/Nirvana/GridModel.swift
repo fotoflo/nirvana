@@ -26,14 +26,27 @@ struct GridCell: Codable, Equatable {
 
 struct GridConfig: Codable, Equatable {
     var cells: [[Bool]]  // 3x3 grid of enabled/disabled
+    var triggerKeyCode: Int64  // Keycode that activates the pager (default: 105 = F13)
 
     var rows: Int { cells.count }
     var cols: Int { cells.first?.count ?? 0 }
 
-    /// Default config: 3x3 with all cells enabled.
+    /// Default config: 3x3 with all cells enabled, F13 as trigger.
     static let defaultConfig = GridConfig(
-        cells: Array(repeating: Array(repeating: true, count: 3), count: 3)
+        cells: Array(repeating: Array(repeating: true, count: 3), count: 3),
+        triggerKeyCode: 105  // F13
     )
+
+    init(cells: [[Bool]], triggerKeyCode: Int64 = 105) {
+        self.cells = cells
+        self.triggerKeyCode = triggerKeyCode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cells = try container.decode([[Bool]].self, forKey: .cells)
+        triggerKeyCode = try container.decodeIfPresent(Int64.self, forKey: .triggerKeyCode) ?? 105
+    }
 
     /// Returns true if the given position is within bounds and enabled.
     func isEnabled(row: Int, col: Int) -> Bool {
